@@ -280,7 +280,6 @@ async def approve_user(message: types.Message):
     conn.close()
 
 
-# --- 🚀 5. ЗАПУСК БОТА ---
 async def main():
     init_db()
     print("Бот запущений! База даних працює.")
