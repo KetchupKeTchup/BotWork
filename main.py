@@ -66,7 +66,7 @@ def get_user_role(user_id):
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-
+    # ff
     # Перевірка чи є в базі
     if db_users.user_exists(user_id):
         await message.answer("Твой кабинет готов к роботе")
