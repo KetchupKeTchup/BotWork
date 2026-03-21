@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from geopy.distance import geodesic
 from numpy.version import full_version
 
-from Registration import Registration
+from Registration import RegistrationNewUsers
 
 from dotenv import load_dotenv
 import os
@@ -24,6 +24,7 @@ OFFICE_COORDS_POL = (28.092451, -16.723255) # Work coordinates
 OFFICE_COORDS2 = (28.239078, -16.797467)    # Coordinates for verification
 MAX_DISTANCE = 100
 ADMIN_IDS = [1366979749]
+db_users = RegistrationNewUsers()
 
 # --- Data base---
 def init_db():
@@ -65,16 +66,13 @@ def get_user_role(user_id):
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    role = get_user_role(user_id)
 
-    if role is None:
-        """ Нова решістрація"""
+    # Перевірка чи є в базі
+    if db_users.user_exists(user_id):
+        await message.answer("Твой кабинет готов к роботе")
+    else:
         await state.set_state(Registration.waiting_for_name)
-        await message.answer("👋 Пожалуйста, введите свое имя и фамилию.")
-
-    elif role == "pending":
-        """Жде на доступ"""
-        await message.answer("⏳")
+        await message.answer("Введи имя и фамилию: ")
 
 
 @dp.message(Registration.waiting_for_name)
