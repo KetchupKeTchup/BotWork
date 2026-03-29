@@ -4,20 +4,19 @@ import sqlite3
 class Registration(StatesGroup):
     waiting_for_name = State()
 
-
 class RegistrationNewUsers:
-    def __init__(self,users= 'DataBase/users.db'):
-        self.users_db = users
-        self.rigistration_new_user()
+    def __init__(self, db_path='DataBase/office.db'): # Використовуємо одну БД
+        self.db_path = db_path
+        self.init_table()
 
-
-    def rigistration_new_user(self):
-        conn = sqlite3.connect(self.users_db)
+    def init_table(self):
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-
+        # Додаємо telegram_id, бо він потрібен для перевірки
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER UNIQUE,
                 name TEXT,
                 last_name TEXT
             )
@@ -25,23 +24,12 @@ class RegistrationNewUsers:
         conn.commit()
         conn.close()
 
-    def user_exists(self,telegram_id: int) -> bool:
-        """Перевірка на існування користувача в базі даних по його телеграм id"""
-        conn = sqlite3.connect(self.users_db)
+    def user_exists(self, telegram_id: int) -> bool:
+        """Перевірка, чи є користувач у таблиці employees."""
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-
-        cursor.execute("SELECT 1 FROM users WHERE telegram_id = ?",(telegram_id))
+        # Кома (telegram_id,) обов'язкова для створення кортежу
+        cursor.execute("SELECT 1 FROM employees WHERE user_id = ?", (telegram_id,))
         result = cursor.fetchone()
         conn.close()
         return result is not None
-
-    def add_user(self, telegram_id: int, name: str, last_name: str = ""):
-        """Додаємо користувача за умови що його не має в базі"""
-        if not self.user_exists(telegram_id):
-            conn = sqlite3.connect(self.users_db)
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO users (telegram_id,name, last_name) VALUES (?,?,?)",(telegram_id,name,last_name))
-            conn.commit()
-            conn.close()
-            return True # Успішно додано
-        return False  #Вже існує користувач
