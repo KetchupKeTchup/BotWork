@@ -39,7 +39,7 @@ CONSTRUCTION_SITES = {
     "Офис": (28.239064, -16.7975147)
 }
 MAX_DISTANCE = 150
-ADMIN_IDS = [1366979749]
+ADMIN_IDS = [1366979749, 478164031]
 
 db_users = RegistrationNewUsers()
 
