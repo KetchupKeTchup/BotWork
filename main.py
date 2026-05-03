@@ -125,8 +125,6 @@ def init_db():
     except sqlite3.OperationalError:
         pass
     conn.commit()
-    conn.close()
-
     # Таблиця співробітників (відразу з новими колонками для нових баз)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS employees(
