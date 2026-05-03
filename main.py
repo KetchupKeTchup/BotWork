@@ -910,7 +910,6 @@ async def process_new_salary(message: types.Message, state: FSMContext):
 async def main():
     init_db()
     print("Бот запущен...")
-    await dp.start_polling(bot)
     asyncio.create_task(morning_report())
     asyncio.create_task(auto_checkout())
 
