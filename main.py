@@ -93,15 +93,27 @@ db_users = RegistrationNewUsers()
 
 
 def init_db():
-    if not os.path.exists('DataBase'):
-        os.makedirs('DataBase')
+    # Створюємо папку якщо її нема
+    os.makedirs('DataBase', exist_ok=True)
 
     conn = sqlite3.connect('DataBase/office.db')
     cursor = conn.cursor()
 
-    # Таблиця відміток
+    # --- Таблиця працівників ---
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS checkins(
+        CREATE TABLE IF NOT EXISTS employees (
+            user_id INTEGER PRIMARY KEY,
+            full_name TEXT,
+            role TEXT,
+            profession TEXT DEFAULT 'Не указано',
+            salary REAL DEFAULT 0,
+            language TEXT DEFAULT 'ru'
+        )
+    ''')
+
+    # --- Таблиця відміток ---
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS checkins (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             full_name TEXT,
@@ -110,44 +122,19 @@ def init_db():
             site_name TEXT
         )
     ''')
-    cursor.execute('''
-            CREATE TABLE IF NOT EXISTS employees(
-                user_id INTEGER PRIMARY KEY,
-                full_name TEXT,
-                role TEXT,
-                profession TEXT DEFAULT 'Не указано',
-                salary REAL DEFAULT 0,
-                language TEXT DEFAULT 'ru'
-            )
-        ''')
-    try:
-        cursor.execute("ALTER TABLE employees ADD COLUMN language TEXT DEFAULT 'ru'")
-    except sqlite3.OperationalError:
-        pass
-    conn.commit()
-    # Таблиця співробітників (відразу з новими колонками для нових баз)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS employees(
-            user_id INTEGER PRIMARY KEY,
-            full_name TEXT,
-            role TEXT,
-            profession TEXT DEFAULT 'Не указано',
-            salary REAL DEFAULT 0
-        )
-    ''')
 
-    # --- ОНОВЛЕННЯ СТАРОЇ БАЗИ ДАНИХ ---
-    # Якщо таблиця вже була створена раніше, додаємо колонки:
-    try:
-        cursor.execute("ALTER TABLE employees ADD COLUMN profession TEXT DEFAULT 'Не указано'")
-    except sqlite3.OperationalError:
-        pass  # Якщо колонка вже є - ігноруємо
+    # --- Міграції (для старих БД) ---
+    # Додаємо відсутні колонки, якщо їх ще нема
 
-    try:
-        cursor.execute("ALTER TABLE employees ADD COLUMN salary REAL DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-        # -----------------------------------
+    def add_column_if_not_exists(column_name, column_def):
+        try:
+            cursor.execute(f"ALTER TABLE employees ADD COLUMN {column_name} {column_def}")
+        except sqlite3.OperationalError:
+            pass  # колонка вже існує
+
+    add_column_if_not_exists("profession", "TEXT DEFAULT 'Не указано'")
+    add_column_if_not_exists("salary", "REAL DEFAULT 0")
+    add_column_if_not_exists("language", "TEXT DEFAULT 'ru'")
 
     conn.commit()
     conn.close()
