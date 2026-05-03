@@ -3,6 +3,7 @@ import sqlite3
 
 class Registration(StatesGroup):
     waiting_for_name = State()
+    waiting_for_language = State()  # Новий стан для вибору мови
 
 class RegistrationNewUsers:
     def __init__(self, db_path='DataBase/office.db'): # Використовуємо одну БД
