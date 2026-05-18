@@ -2,10 +2,7 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="309489e8-ccc3-485b-9241-2a6e15fcec25" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/BotWork.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/BotWork.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main2Bup.py" beforeDir="false" afterPath="$PROJECT_DIR$/main2Bup.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
