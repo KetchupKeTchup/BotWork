@@ -15,7 +15,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 
 
-# Імпортуємо виправлені класи
+# ------ Імпортуємо класи -------
 from Registration import RegistrationNewUsers, Registration
 class AdminBroadcast(StatesGroup):
     waiting_for_message = State()
@@ -25,14 +25,13 @@ class HREdit(StatesGroup):
 class WorkerRequest(StatesGroup):
     waiting_for_message = State()
 
-# Завантаження токена
+# --------------------Токен --------------------
 load_dotenv("token.env")
 TOKEN = os.getenv("TOKEN")
-
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Налаштування координат
+# --------------------Налаштування координат --------------------
 CONSTRUCTION_SITES = {
     "Кальдера": (28.073849,-16.722580),
     "Нирвана": (28.092456, -16.723134),
@@ -40,10 +39,9 @@ CONSTRUCTION_SITES = {
 }
 MAX_DISTANCE = 150
 ADMIN_IDS = [1366979749, 478164031]
-
 db_users = RegistrationNewUsers()
 
-
+#-------------------- Data Base -----------------------------------------
 def init_db():
     if not os.path.exists('DataBase'):
         os.makedirs('DataBase')
@@ -89,6 +87,8 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+# ------------------------------------------------------------------------------------------------------------------
 def get_all_users():
     """
         Збирати всі Telegram ID щоб розсилати підчас розсилки
@@ -854,8 +854,6 @@ async def main():
     asyncio.create_task(auto_checkout())
 
     await dp.start_polling(bot)
-
-
 
 if __name__ == "__main__":
     asyncio.run(main())

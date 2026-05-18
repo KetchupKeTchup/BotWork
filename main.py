@@ -13,10 +13,16 @@ from aiogram.fsm.context import FSMContext
 from aiogram import types, F
 from aiogram.exceptions import TelegramBadRequest
 
-
-
-# Імпортуємо виправлені класи
+# Імпортуємо наші модулі
+from logger_config import setup_logging, get_logger, create_component_logger
+from db_migration import migrate_db, log_user_action
 from Registration import RegistrationNewUsers, Registration
+
+# Налаштування логування
+logger = setup_logging(logging.DEBUG)
+geo_logger = create_component_logger("geo")
+db_logger = create_component_logger("db")
+admin_logger = create_component_logger("admin")
 class AdminBroadcast(StatesGroup):
     waiting_for_message = State()
 class HREdit(StatesGroup):
@@ -86,58 +92,21 @@ CONSTRUCTION_SITES = {
     "Нирвана": (28.092456, -16.723134),
     "Офис": (28.239064, -16.7975147)
 }
-MAX_DISTANCE = 150
+MAX_DISTANCE = 300  # Максимальна відстань в метрах для відмітки
 ADMIN_IDS = [1366979749, 478164031]
 
 db_users = RegistrationNewUsers()
 
 
 def init_db():
-    # Створюємо папку якщо її нема
-    os.makedirs('DataBase', exist_ok=True)
-
-    conn = sqlite3.connect('DataBase/office.db')
-    cursor = conn.cursor()
-
-    # --- Таблиця працівників ---
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS employees (
-            user_id INTEGER PRIMARY KEY,
-            full_name TEXT,
-            role TEXT,
-            profession TEXT DEFAULT 'Не указано',
-            salary REAL DEFAULT 0,
-            language TEXT DEFAULT 'ru'
-        )
-    ''')
-
-    # --- Таблиця відміток ---
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS checkins (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            full_name TEXT,
-            checkin_time TEXT,
-            checkout_time TEXT,
-            site_name TEXT
-        )
-    ''')
-
-    # --- Міграції (для старих БД) ---
-    # Додаємо відсутні колонки, якщо їх ще нема
-
-    def add_column_if_not_exists(column_name, column_def):
-        try:
-            cursor.execute(f"ALTER TABLE employees ADD COLUMN {column_name} {column_def}")
-        except sqlite3.OperationalError:
-            pass  # колонка вже існує
-
-    add_column_if_not_exists("profession", "TEXT DEFAULT 'Не указано'")
-    add_column_if_not_exists("salary", "REAL DEFAULT 0")
-    add_column_if_not_exists("language", "TEXT DEFAULT 'ru'")
-
-    conn.commit()
-    conn.close()
+    """Ініціалізація БД з міграціями"""
+    try:
+        logger.info("🔧 Ініціалізація БД...")
+        migrate_db('DataBase/office.db')
+        logger.info("✅ БД успішно ініціалізована")
+    except Exception as e:
+        logger.error(f"❌ Критична помилка при ініціалізації БД: {e}", exc_info=True)
+        raise
 def get_user_data(user_id):
     conn = sqlite3.connect('DataBase/office.db')
     cursor = conn.cursor()
@@ -195,31 +164,29 @@ def get_main_keyboard(user_id: int, lang='ru'):
 @dp.message(Command("admin"))
 @dp.message(F.text == "Админ-панель")
 async def admin_panel(message: types.Message):
-    print(f"--- Нажата кнопка Админ-панель. ID юзера: {message.from_user.id} ---")
+    user_id = message.from_user.id
+    admin_logger.info(f"🔐 Спроба доступу до адмін-панелі. ID юзера: {user_id}")
 
     # Перевірка прав
-    if message.from_user.id not in ADMIN_IDS:
-        print(f"❌ БЛОКУВАННЯ: ID {message.from_user.id} немає у списку ADMIN_IDS {ADMIN_IDS}")
+    if user_id not in ADMIN_IDS:
+        admin_logger.warning(f"❌ БЛОКУВАННЯ: ID {user_id} немає у списку ADMIN_IDS")
         return
 
-    print("✅ Права підтверджено. Генерую дашборд...")
+    admin_logger.info(f"✅ Права підтверджено для ID {user_id}. Генерую дашборд...")
 
     try:
         text, keyboard = get_admin_dashboard(is_refresh=False)
-        print("✅ Дашборд згенеровано успішно. Відправляю в Telegram...")
-
         await message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
-        print("✅ Повідомлення відправлено.")
-
-        # Спроба видалити
+        
+        # Спроба видалити стару кнопку
         try:
             await message.delete()
-            print("✅ Старе повідомлення видалено.")
         except Exception as e:
-            print(f"⚠️ Не вдалося видалити повідомлення: {e}")
+            admin_logger.debug(f"⚠️  Не вдалося видалити повідомлення: {e}")
 
     except Exception as e:
-        print(f"❌ КРИТИЧНА ПОМИЛКА при створенні адмінки: {e}")
+        admin_logger.error(f"❌ Критична помилка при створенні адмін-панелі: {e}", exc_info=True)
+        await message.answer("❌ Помилка при завантаженні панелі")
 
 
 @dp.message(CommandStart())
@@ -273,95 +240,163 @@ async def process_registration_name(message: types.Message, state: FSMContext):
 
 @dp.message(F.location)
 async def handle_location(message: types.Message):
+    """Обробляє геолокацію та реєструє відмітку"""
     user_id = message.from_user.id
-    lang, _, _ = get_user_data(user_id)
-    user_coords = (message.location.latitude, message.location.longitude)
+    try:
+        lang, _, _ = get_user_data(user_id)
+        user_coords = (message.location.latitude, message.location.longitude)
+        
+        geo_logger.debug(f"📍 Геолокація отримана від користувача {user_id}: {user_coords}")
 
-    current_site = None
-    for site_name, site_coords in CONSTRUCTION_SITES.items():
-        if geodesic(site_coords, user_coords).meters <= MAX_DISTANCE:
-            current_site = site_name
-            break
+        current_site = None
+        min_distance = float('inf')
+        
+        # Шукаємо найближчий об'єкт
+        for site_name, site_coords in CONSTRUCTION_SITES.items():
+            distance = geodesic(site_coords, user_coords).meters
+            geo_logger.debug(f"  → Об'єкт '{site_name}': відстань = {distance:.1f}м")
+            
+            if distance <= MAX_DISTANCE and distance < min_distance:
+                current_site = site_name
+                min_distance = distance
 
-    if current_site:
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if current_site:
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        with sqlite3.connect('DataBase/office.db') as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT id FROM checkins WHERE user_id = ? AND checkin_time LIKE ?', (user_id, f"{today_str}%"))
-            if cursor.fetchone():
-                await message.answer(TEXTS[lang]['already_checked'].format(current_site))
-            else:
-                cursor.execute('SELECT full_name FROM employees WHERE user_id = ?', (user_id,))
-                full_name = cursor.fetchone()[0]
-                cursor.execute('INSERT INTO checkins (user_id, full_name, checkin_time, site_name) VALUES (?, ?, ?, ?)',
-                               (user_id, full_name, current_time, current_site))
-                conn.commit()
-                await message.answer(TEXTS[lang]['shift_started'].format(current_site, current_time))
-    else:
-        await message.answer(TEXTS[lang]['too_far'])
+            try:
+                with sqlite3.connect('DataBase/office.db') as conn:
+                    cursor = conn.cursor()
+                    
+                    # Перевіряємо, чи вже был відмітка сьогодні
+                    cursor.execute(
+                        'SELECT id FROM checkins WHERE user_id = ? AND checkin_time LIKE ?',
+                        (user_id, f"{today_str}%")
+                    )
+                    if cursor.fetchone():
+                        geo_logger.info(f"⚠️  Користувач {user_id} вже відмітився сьогодні на '{current_site}'")
+                        await message.answer(TEXTS[lang]['already_checked'].format(current_site))
+                    else:
+                        cursor.execute('SELECT full_name FROM employees WHERE user_id = ?', (user_id,))
+                        result = cursor.fetchone()
+                        full_name = result[0] if result else "Unknown"
+                        
+                        # ВАЖЛИВО: Зберігаємо GPS координати
+                        cursor.execute('''
+                            INSERT INTO checkins 
+                            (user_id, full_name, checkin_time, checkin_latitude, checkin_longitude, 
+                             site_name, distance_meters) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (user_id, full_name, current_time, 
+                              message.location.latitude, message.location.longitude,
+                              current_site, round(min_distance, 2)))
+                        conn.commit()
+                        
+                        # Логуємо дію
+                        log_user_action(
+                            user_id, 
+                            'checkin',
+                            f"Відмітка на об'єкті '{current_site}' з координат {user_coords}, відстань {min_distance:.1f}м"
+                        )
+                        
+                        geo_logger.info(f"✅ Користувач {user_id} ({full_name}) відмітився на '{current_site}' (відстань: {min_distance:.1f}м)")
+                        await message.answer(TEXTS[lang]['shift_started'].format(current_site, current_time))
+                        
+            except Exception as e:
+                db_logger.error(f"❌ Помилка при записі відмітки для користувача {user_id}: {e}", exc_info=True)
+                await message.answer("❌ Помилка при реєстрації. Спробуйте ще раз.")
+        else:
+            geo_logger.warning(f"⚠️  Користувач {user_id} занадто далеко від об'єктів (найближче: {min_distance:.1f}м, допустимо: {MAX_DISTANCE}м)")
+            await message.answer(TEXTS[lang]['too_far'])
+            
+    except Exception as e:
+        logger.error(f"❌ Помилка при обробці геолокації від користувача {user_id}: {e}", exc_info=True)
+        await message.answer("❌ Критична помилка. Спробуйте пізніше.")
 async def morning_report():
-    """Надсилає адміну звіт о 08:30 про тих, хто вже прийшов"""
+    """Фонова задача: надсилає адміну звіт о 08:30 про тих, хто вже прийшов"""
+    logger.info("🌅 Модуль 'morning_report' запущено")
+    
     while True:
-        now = datetime.now()
-        if now.hour == 8 and now.minute == 30:
-            today_str = now.strftime("%Y-%m-%d")
+        try:
+            now = datetime.now()
+            if now.hour == 8 and now.minute == 30:
+                today_str = now.strftime("%Y-%m-%d")
+                logger.info(f"📊 Готування ранкового звіту за {today_str}...")
 
-            with sqlite3.connect('DataBase/office.db') as conn:
-                cursor = conn.cursor()
-                cursor.execute('SELECT site_name, full_name FROM checkins WHERE checkin_time LIKE ?', (f"{today_str}%",))
-                records = cursor.fetchall()
+                with sqlite3.connect('DataBase/office.db') as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        'SELECT site_name, full_name FROM checkins WHERE checkin_time LIKE ?', 
+                        (f"{today_str}%",)
+                    )
+                    records = cursor.fetchall()
 
-            if records:
-                # Групуємо дані: { "Кальдера": ["Степа", "Иван"], "Нирвана": ["Артем"] }
-                report_data = {}
-                for site, name in records:
-                    if site not in report_data:
-                        report_data[site] = []
-                    report_data[site].append(name)
+                if records:
+                    # Групуємо дані по об'єктам
+                    report_data = {}
+                    for site, name in records:
+                        if site not in report_data:
+                            report_data[site] = []
+                        report_data[site].append(name)
 
-                msg = f"☀️ **Утренний отчет ({today_str})**\n\n"
-                for site, workers in report_data.items():
-                    msg += f"🏗 **{site}**: {', '.join(workers)}\n"
-            else:
-                msg = "На 08:30 еще никто не отметился."
+                    msg = f"☀️ **Утренний отчет ({today_str})**\n\n"
+                    for site, workers in report_data.items():
+                        msg += f"🏗 **{site}**: {', '.join(workers)}\n"
+                        
+                    logger.info(f"📤 Відправка ранкового звіту всім адмінам ({len(ADMIN_IDS)} адміністраторів)")
+                else:
+                    msg = "На 08:30 еще никто не отметился."
+                    logger.warning("⚠️  На 08:30 ніхто не відмітився")
 
-            # Надсилаємо всім адмінам
-            for admin_id in ADMIN_IDS:
-                try:
-                    await bot.send_message(admin_id, msg, parse_mode="Markdown")
-                except:
-                    pass
+                # Надсилаємо всім адмінам
+                for admin_id in ADMIN_IDS:
+                    try:
+                        await bot.send_message(admin_id, msg, parse_mode="Markdown")
+                        logger.debug(f"✅ Звіт надіслано адміну {admin_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Помилка при відправці звіту адміну {admin_id}: {e}")
 
-            await asyncio.sleep(61)
-        await asyncio.sleep(30)
+                await asyncio.sleep(61)
+            await asyncio.sleep(30)
+            
+        except Exception as e:
+            logger.error(f"❌ Помилка в morning_report: {e}", exc_info=True)
+            await asyncio.sleep(30)
 
 async def auto_checkout():
     """Фонова задача: кожен день о 16:00 автоматично закриває зміни"""
+    logger.info("🕐 Модуль 'auto_checkout' запущено")
+    
     while True:
-        now = datetime.now()
+        try:
+            now = datetime.now()
 
-        # Якщо зараз рівно 16:00
-        if now.hour == 16 and now.minute == 0:
-            today_str = now.strftime("%Y-%m-%d")
-            checkout_str = now.strftime("%Y-%m-%d 16:00:00")
+            # Якщо зараз рівно 16:00
+            if now.hour == 16 and now.minute == 0:
+                today_str = now.strftime("%Y-%m-%d")
+                checkout_str = now.strftime("%Y-%m-%d 16:00:00")
+                
+                logger.info(f"🚪 Автоматичне закриття змін за {today_str}...")
 
-            with sqlite3.connect('DataBase/office.db') as conn:
-                cursor = conn.cursor()
-                # Знаходимо всі сьогоднішні записи, де ще немає часу виходу, і ставимо 16:00
-                cursor.execute('''
-                    UPDATE checkins 
-                    SET checkout_time = ? 
-                    WHERE checkin_time LIKE ? AND checkout_time IS NULL
-                ''', (checkout_str, f"{today_str}%"))
-                conn.commit()
+                with sqlite3.connect('DataBase/office.db') as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE checkins 
+                        SET checkout_time = ? 
+                        WHERE checkin_time LIKE ? AND checkout_time IS NULL
+                    ''', (checkout_str, f"{today_str}%"))
+                    affected = cursor.rowcount
+                    conn.commit()
+                    
+                logger.info(f"✅ Закрито {affected} змін(и) о 16:00")
 
-            # Спимо 61 секунду, щоб уникнути повторного спрацювання в ту саму хвилину
-            await asyncio.sleep(61)
+                await asyncio.sleep(61)
 
-            # Перевіряємо час кожні 30 секунд
-        await asyncio.sleep(30)
+            await asyncio.sleep(30)
+            
+        except Exception as e:
+            logger.error(f"❌ Помилка в auto_checkout: {e}", exc_info=True)
+            await asyncio.sleep(30)
 
 @dp.message(F.text == "💬 Написать админу")
 async def start_worker_request(message: types.Message, state: FSMContext):
@@ -564,51 +599,64 @@ async def start_broadcast(callback: types.CallbackQuery, state: FSMContext):
 # Обработчик самого текста рассылки
 @dp.message(AdminBroadcast.waiting_for_message)
 async def process_broadcast_message(message: types.Message, state: FSMContext):
-    # Если передумали отправлять
+    """Обробляє текст для розсилки"""
     if message.text.lower() == 'отмена':
         await message.answer("❌ Рассылка отменена.")
         await state.clear()
         return
 
-    # Получаем список всех сотрудников из базы
-    with sqlite3.connect('DataBase/office.db') as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM employees")
-        users = cursor.fetchall()
+    user_id = message.from_user.id
+    admin_logger.info(f"🔔 Адмін {user_id} ініціює розсилку")
+
+    # Отримуємо список всіх сотрудників
+    try:
+        with sqlite3.connect('DataBase/office.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id FROM employees")
+            users = cursor.fetchall()
+    except Exception as e:
+        admin_logger.error(f"❌ Помилка при отриманні списку користувачів: {e}")
+        await message.answer("❌ Помилка при отриманні списку користувачів")
+        await state.clear()
+        return
 
     success_count = 0
     block_count = 0
+    error_count = 0
 
-    await message.answer("⏳ Начинаю рассылку... Это может занять несколько секунд.")
+    await message.answer(f"⏳ Начинаю рассылку {len(users)} сотрудникам... Это может занять несколько секунд.")
+    admin_logger.info(f"📤 Почине розсилка {len(users)} користувачам")
 
-    # Рассылаем всем по очереди
+    # Рассилаем всем по очереди
     for user_row in users:
-        user_id = user_row[0]
+        recipient_id = user_row[0]
         try:
-            # Отправляем сообщение
-            await message.bot.send_message(
-                chat_id=user_id,
+            await bot.send_message(
+                chat_id=recipient_id,
                 text=f"⚠️ **ОБЪЯВЛЕНИЕ:**\n\n{message.text}",
                 parse_mode="Markdown"
             )
             success_count += 1
-            # Микро-пауза для защиты от блокировки Telegram (антиспам)
+            admin_logger.debug(f"✅ Розсилка надіслана користувачу {recipient_id}")
+            
+            # Мікро-пауза для захисту від блокування
             await asyncio.sleep(0.05)
+            
         except Exception as e:
-            # Если сотрудник заблокировал бота или удалил чат
             block_count += 1
-            logging.error(f"Не удалось отправить {user_id}: {e}")
+            error_msg = str(e)
+            admin_logger.warning(f"⚠️  Не вдалося надіслати користувачу {recipient_id}: {error_msg}")
 
-    # Сбрасываем состояние
     await state.clear()
 
-    # Выводим отчет
-    await message.answer(
+    # Висновок
+    result_msg = (
         f"✅ **Рассылка завершена!**\n\n"
         f"Успешно доставлено: `{success_count}` чел.\n"
-        f"Недоставлено (заблокировали бота): `{block_count}` чел.",
-        parse_mode="Markdown"
+        f"Недоставлено (заблокировали бота): `{block_count}` чел."
     )
+    await message.answer(result_msg, parse_mode="Markdown")
+    admin_logger.info(f"📊 Розсилка завершена: успішно={success_count}, заблоковано={block_count}")
 
 @dp.callback_query(F.data == "admin_stats")
 async def advanced_statistics(callback: types.CallbackQuery):
@@ -893,14 +941,38 @@ async def process_new_salary(message: types.Message, state: FSMContext):
 
 # Запуск
 async def main():
-    init_db()
-    print("Бот запущен...")
-    asyncio.create_task(morning_report())
-    asyncio.create_task(auto_checkout())
-
-    await dp.start_polling(bot)
-
+    """Основна функція бота"""
+    try:
+        logger.info("=" * 60)
+        logger.info("🚀 ЗАПУСК TELEGRAM-БОТА ДЛЯ ОБЛІКУ РОБОЧОГО ЧАСУ")
+        logger.info("=" * 60)
+        
+        # Ініціалізація БД
+        init_db()
+        
+        # Запуск фонових задач
+        logger.info("🔄 Запуск фонових завдань...")
+        asyncio.create_task(morning_report())
+        asyncio.create_task(auto_checkout())
+        
+        logger.info("✅ Бот готовий до роботи. Підключення до Telegram...")
+        
+        # Запуск політу
+        await dp.start_polling(bot)
+        
+    except KeyboardInterrupt:
+        logger.info("⏹️  Бот зупинено користувачем")
+    except Exception as e:
+        logger.critical(f"❌ КРИТИЧНА ПОМИЛКА: {e}", exc_info=True)
+        raise
+    finally:
+        logger.info("🔌 Відключення від Telegram...")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n✋ Бот зупинено")
+    except Exception as e:
+        print(f"❌ Критична помилка: {e}")
