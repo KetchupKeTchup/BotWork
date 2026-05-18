@@ -2,8 +2,12 @@
 token.env
 
 DataBase/office.db
+DataBase/logs/
 *.db
+*.log
 
 __pycache__/
+.idea/
 venv/
 env/
+.vscode/
