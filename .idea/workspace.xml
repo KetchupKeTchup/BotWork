@@ -3,6 +3,7 @@
   <component name="ChangeListManager">
     <list default="true" id="309489e8-ccc3-485b-9241-2a6e15fcec25" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -55,7 +56,7 @@
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
     "codeWithMe.voiceChat.enabledByDefault": "false",
     "git-widget-placeholder": "main",
-    "last_opened_file_path": "/home/yevhen/Стільниця/BotWork",
+    "last_opened_file_path": "/home/yevhen/Рабочий стол/startSql",
     "nodejs_package_manager_path": "npm",
     "settings.editor.selected.configurable": "preferences.editor"
   }
