@@ -239,86 +239,78 @@ async def process_registration_name(message: types.Message, state: FSMContext):
 
 @dp.message(F.location)
 async def handle_location(message: types.Message):
-    """Обробка геолокації користувача для відмітки на об'єкті"""
+    """Обробляє геолокацію та реєструє відмітку"""
     user_id = message.from_user.id
-    
-    # 1. Отримуємо мову та дані користувача
-    lang, _, _ = get_user_data(user_id)
-    t = TEXTS[lang]
-
-    user_coords = (message.location.latitude, message.location.longitude)
-    geo_logger.info(f"📍 Отримано координати від {user_id}: {user_coords}")
-
-    # 2. ШУКАЄМО НАЙБЛИЖЧИЙ ОБ'ЄКТ (Математично точний мінімум)
-    closest_site = None
-    min_distance = float('inf')
-
-    for site_name, site_coords in CONSTRUCTION_SITES.items():
-        distance = geodesic(site_coords, user_coords).meters
-        geo_logger.debug(f"  → Перевірка '{site_name}': відстань = {distance:.1f}м")
+    try:
+        lang, _, _ = get_user_data(user_id)
+        user_coords = (message.location.latitude, message.location.longitude)
         
-        # Якщо цей об'єкт ближчий за всі попередні — запам'ятовуємо його
-        if distance < min_distance:
-            min_distance = distance
-            closest_site = site_name
+        geo_logger.debug(f"📍 Геолокація отримана від користувача {user_id}: {user_coords}")
 
-    # 3. ПЕРЕВІРЯЄМО РАДІУС ДОПУСКУ ДО НАЙБЛИЖЧОГО ОБ'ЄКТА
-    if min_distance <= MAX_DISTANCE:
-        current_site = closest_site
-        geo_logger.info(f"✅ Визначено найближчий об'єкт: {current_site} (відстань: {min_distance:.1f}м)")
-    else:
         current_site = None
-        geo_logger.warning(f"❌ Користувач занадто далеко. Найближчий: '{closest_site}' ({min_distance:.1f}м), Ліміт: {MAX_DISTANCE}м")
+        min_distance = float('inf')
+        
+        # Шукаємо найближчий об'єкт
+        for site_name, site_coords in CONSTRUCTION_SITES.items():
+            distance = geodesic(site_coords, user_coords).meters
+            geo_logger.debug(f"  → Об'єкт '{site_name}': відстань = {distance:.1f}м")
+            
+            if distance <= MAX_DISTANCE and distance < min_distance:
+                current_site = site_name
+                min_distance = distance
 
-    # 4. ФІКСУЄМО ПРИХІД У БАЗІ ДАНИХ (якщо об'єкт знайдено)
-    if current_site:
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if current_site:
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        try:
-            conn = sqlite3.connect('DataBase/office.db')
-            cursor = conn.cursor()
-
-            # Перевірка на дублікат відмітки за сьогодні
-            cursor.execute(
-                'SELECT id FROM checkins WHERE user_id = ? AND checkin_time LIKE ?',
-                (user_id, f"{today_str}%")
-            )
-            already_checked = cursor.fetchone()
-
-            if already_checked:
-                geo_logger.warning(f"⚠️ Повторна спроба відмітки: user_id={user_id} вже відмічений сьогодні")
-                await message.answer(t['already_checked'].format(current_site))
-            else:
-                # Отримуємо ім'я для логів
-                cursor.execute('SELECT full_name FROM employees WHERE user_id = ?', (user_id,))
-                user_res = cursor.fetchone()
-                full_name = user_res[0] if user_res else "Неизвестный"
-
-                # Запис приходу з новими GPS-колонками для аналітики (як вимагає db_migration)
-                cursor.execute('''
-                    INSERT INTO checkins (
-                        user_id, full_name, checkin_time, site_name, 
-                        checkin_latitude, checkin_longitude, distance_from_site
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (user_id, full_name, current_time, current_site, user_coords[0], user_coords[1], round(min_distance, 1)))
-                
-                conn.commit()
-                conn.close()
-                # Аудит лог
-                log_user_action(user_id, "checkin", f"Прихід на об'єкт {current_site}. Відстань: {min_distance:.1f}м")
-                geo_logger.info(f"🚀 Успішний прихід: {full_name} ({user_id}) на {current_site}")
-                
-                await message.answer(t['shift_started'].format(current_site, current_time.split(" ")[1][:5]))
-                
-        except Exception as e:
-            geo_logger.error(f"❌ Помилка роботи з БД при checkin: {e}")
-            await message.answer("⚠️ Ошибка базы данных. Обратитесь к администратору.")
-        finally:
-            conn.close()
-    else:
-        # Повідомлення, якщо користувач не потрапив у радіус жодного об'єкта
-        await message.answer(t['too_far'])
+            try:
+                with sqlite3.connect('DataBase/office.db') as conn:
+                    cursor = conn.cursor()
+                    
+                    # Перевіряємо, чи вже был відмітка сьогодні
+                    cursor.execute(
+                        'SELECT id FROM checkins WHERE user_id = ? AND checkin_time LIKE ?',
+                        (user_id, f"{today_str}%")
+                    )
+                    if cursor.fetchone():
+                        geo_logger.info(f"⚠️  Користувач {user_id} вже відмітився сьогодні на '{current_site}'")
+                        await message.answer(TEXTS[lang]['already_checked'].format(current_site))
+                    else:
+                        cursor.execute('SELECT full_name FROM employees WHERE user_id = ?', (user_id,))
+                        result = cursor.fetchone()
+                        full_name = result[0] if result else "Unknown"
+                        
+                        # ВАЖЛИВО: Зберігаємо GPS координати
+                        cursor.execute('''
+                            INSERT INTO checkins 
+                            (user_id, full_name, checkin_time, checkin_latitude, checkin_longitude, 
+                             site_name, distance_meters) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (user_id, full_name, current_time, 
+                              message.location.latitude, message.location.longitude,
+                              current_site, round(min_distance, 2)))
+                        conn.commit()
+                        
+                        # Логуємо дію
+                        log_user_action(
+                            user_id, 
+                            'checkin',
+                            f"Відмітка на об'єкті '{current_site}' з координат {user_coords}, відстань {min_distance:.1f}м"
+                        )
+                        
+                        geo_logger.info(f"✅ Користувач {user_id} ({full_name}) відмітився на '{current_site}' (відстань: {min_distance:.1f}м)")
+                        await message.answer(TEXTS[lang]['shift_started'].format(current_site, current_time))
+                        
+            except Exception as e:
+                db_logger.error(f"❌ Помилка при записі відмітки для користувача {user_id}: {e}", exc_info=True)
+                await message.answer("❌ Помилка при реєстрації. Спробуйте ще раз.")
+        else:
+            geo_logger.warning(f" Користувач {user_id} занадто далеко від об'єктів (найближче: {min_distance:.1f}м, допустимо: {MAX_DISTANCE}м)")
+            await message.answer(TEXTS[lang]['too_far'])
+            
+    except Exception as e:
+        logger.error(f"❌ Помилка при обробці геолокації від користувача {user_id}: {e}", exc_info=True)
+        await message.answer("❌ Критична помилка. Спробуйте пізніше.")
 async def morning_report():
     """Фонова задача: надсилає адміну звіт о 08:30 про тих, хто вже прийшов"""
     logger.info("🌅 Модуль 'morning_report' запущено")
