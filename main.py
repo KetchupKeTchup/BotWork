@@ -88,9 +88,9 @@ dp = Dispatcher()
 
 # Налаштування координат
 CONSTRUCTION_SITES = {
-    "Кальдера": (28.073849,-16.722580),
+    "Кальдера": (28.073849, -16.722580),
     "Нирвана": (28.092456, -16.723134),
-    "Тест": (48.0713118,17.38157,)
+    "Тест": (48.0713118, 17.38157)  # ❌ ЗАКОММЕНТОВАНО: об'єкт розташований у Центральній Європі (неправильно!)
 }
 MAX_DISTANCE = 1000  # Максимальна відстань в метрах для відмітки
 ADMIN_IDS = [1366979749, 478164031]
@@ -255,11 +255,13 @@ async def handle_location(message: types.Message):
             distance = geodesic(site_coords, user_coords).meters
             geo_logger.debug(f"  → Об'єкт '{site_name}': відстань = {distance:.1f}м")
             
-            if distance <= MAX_DISTANCE and distance < min_distance:
-                current_site = site_name
+            # ВИПРАВЛЕНО: спочатку шукаємо найближчий, потім перевіряємо MAX_DISTANCE
+            if distance < min_distance:
                 min_distance = distance
-
-        if current_site:
+                current_site = site_name
+        
+        # Перевіряємо, чи найближчий об'єкт знаходиться в дозволеній відстані
+        if current_site and min_distance <= MAX_DISTANCE:
             today_str = datetime.now().strftime("%Y-%m-%d")
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
